@@ -37,9 +37,12 @@ button{font:inherit;border:0;border-radius:12px;padding:13px 16px;cursor:pointer
 </section>
 <section class="panel controls">
 <div><label>縦横比</label><select id="ratio"><option value="1">1:1（正方形）</option><option value="0.75">3:4（縦）</option><option value="1.333">4:3</option><option value="1.5">3:2</option><option value="1.777">16:9</option><option value="free">自由</option></select></div>
+<div class="note" id="dimensionInfo">元画像・切り抜き範囲のピクセル数を表示します。</div>
 <div class="row"><div><label>出力幅(px)</label><input id="outW" type="number" min="1" value="500"></div><div><label>出力高さ(px)</label><input id="outH" type="number" min="1" value="500"></div></div>
+<div class="row"><button class="secondary" id="autoSize">切り抜き実寸を出力サイズにする</button><button class="secondary" id="resetSize">500×500に戻す</button></div>
 <div class="note">枠をドラッグして移動、右下の丸をドラッグしてサイズ変更。枠の位置・サイズは画像に対する割合として、すべての写真に適用されます。</div>
 <button class="primary" id="process">すべての写真を切り抜く</button>
+<button class="primary" id="saveAll" disabled>一括保存（共有）</button>
 <button class="secondary" id="previewOne">選択中の写真を切り抜いて確認</button>
 <div id="status" aria-live="polite" style="font-size:13px;color:#536174"></div>
 <div id="results" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px"></div>
@@ -50,7 +53,10 @@ const filesEl=document.querySelector('#files'),img=document.querySelector('#main
 let items=[],active=0,box={x:.2,y:.2,w:.6,h:.6},drag=null,display={x:0,y:0,w:0,h:0},cropInitialized=false;
 function loadItem(i){active=i;img.onload=()=>{fit();if(!cropInitialized){setRatio();cropInitialized=true}else{drawCrop()}};img.src=items[i].url;[...thumbs.children].forEach((t,j)=>t.classList.toggle('active',j===i))}
 function fit(){const p=preview.getBoundingClientRect(),nw=img.naturalWidth,nh=img.naturalHeight;let s=Math.min((p.width-12)/nw,(p.height-12)/nh);display.w=nw*s;display.h=nh*s;display.x=(p.width-display.w)/2;display.y=(p.height-display.h)/2;img.style.width=display.w+'px';img.style.height=display.h+'px';img.style.position='absolute';img.style.left=display.x+'px';img.style.top=display.y+'px'}
-function drawCrop(){if(!img.naturalWidth)return;crop.hidden=false;crop.style.left=(display.x+box.x*display.w)+'px';crop.style.top=(display.y+box.y*display.h)+'px';crop.style.width=(box.w*display.w)+'px';crop.style.height=(box.h*display.h)+'px'}
+function drawCrop(){if(!img.naturalWidth)return;crop.hidden=false;crop.style.left=(display.x+box.x*display.w)+'px';crop.style.top=(display.y+box.y*display.h)+'px';crop.style.width=(box.w*display.w)+'px';crop.style.height=(box.h*display.h)+'px';updateDimensions()}
+function updateDimensions(){if(!img.naturalWidth)return;const sw=Math.round(box.w*img.naturalWidth),sh=Math.round(box.h*img.naturalHeight);document.querySelector('#dimensionInfo').textContent=`元画像：${img.naturalWidth} × ${img.naturalHeight} px ／ 切り抜き範囲：約${sw} × ${sh} px`;}
+document.querySelector('#autoSize').onclick=()=>{document.querySelector('#outW').value=Math.max(1,Math.round(box.w*img.naturalWidth));document.querySelector('#outH').value=Math.max(1,Math.round(box.h*img.naturalHeight));};
+document.querySelector('#resetSize').onclick=()=>{document.querySelector('#outW').value=500;document.querySelector('#outH').value=500;};
 function setRatio(){let r=ratioEl.value;if(r==='free')return;const ar=Number(r),imageAR=img.naturalWidth/img.naturalHeight;let w=.65,h=w*imageAR/ar;if(h>.75){h=.75;w=h*ar/imageAR}box.w=w;box.h=h;box.x=(1-w)/2;box.y=(1-h)/2;drawCrop()}
 filesEl.onchange=()=>{items.forEach(x=>URL.revokeObjectURL(x.url));cropInitialized=false;items=[...filesEl.files].filter(f=>f.type.startsWith('image/')).map(f=>({file:f,url:URL.createObjectURL(f)}));thumbs.innerHTML='';items.forEach((it,i)=>{let t=document.createElement('img');t.src=it.url;t.className='thumb';t.onclick=()=>loadItem(i);thumbs.append(t)});if(items.length)loadItem(0);status.textContent=items.length+'枚の写真を読み込みました。1枚目の切り取り枠を調整してください。'};
 ratioEl.onchange=setRatio;
@@ -59,7 +65,7 @@ crop.addEventListener('pointerdown',e=>{e.preventDefault();crop.setPointerCaptur
 crop.addEventListener('pointermove',e=>{if(!drag)return;let p=pointer(e),dx=p.x-drag.start.x,dy=p.y-drag.start.y;if(drag.isHandle){box.w=Math.max(.08,Math.min(1-drag.box.x,drag.box.w+dx));box.h=Math.max(.08,Math.min(1-drag.box.y,drag.box.h+dy));if(ratioEl.value!=='free'){let ar=Number(ratioEl.value),imageAR=img.naturalWidth/img.naturalHeight;box.h=box.w*imageAR/ar}}else{box.x=Math.max(0,Math.min(1-box.w,drag.box.x+dx));box.y=Math.max(0,Math.min(1-box.h,drag.box.y+dy))}drawCrop()});
 crop.addEventListener('pointerup',()=>drag=null);crop.addEventListener('pointercancel',()=>drag=null);
 function makeCanvas(item){return new Promise((resolve,reject)=>{let im=new Image();im.onload=()=>{let sx=box.x*im.naturalWidth,sy=box.y*im.naturalHeight,sw=box.w*im.naturalWidth,sh=box.h*im.naturalHeight;let c=document.createElement('canvas');c.width=Math.max(1,+document.querySelector('#outW').value);c.height=Math.max(1,+document.querySelector('#outH').value);c.getContext('2d').drawImage(im,sx,sy,sw,sh,0,0,c.width,c.height);c.toBlob(b=>resolve(b),'image/jpeg',.92)};im.onerror=reject;im.src=item.url})}
-let previewBlob=null;
+let previewBlob=null,processedBlobs=[];
 document.querySelector('#previewOne').onclick=async()=>{
  if(!items.length){status.textContent='先に写真を選んでください';return}
  previewBlob=await makeCanvas(items[active]);
@@ -86,14 +92,15 @@ document.querySelector('#process').onclick=async()=>{
  let results=document.querySelector('#results');results.innerHTML='';
  status.textContent='切り抜き画像を作成中…';
  for(let i=0;i<items.length;i++){
-  let b=await makeCanvas(items[i]),url=URL.createObjectURL(b),name='crop_'+(i+1).toString().padStart(2,'0')+'.jpg';
+  let b=await makeCanvas(items[i]),url=URL.createObjectURL(b),name='crop_'+(i+1).toString().padStart(2,'0')+'.jpg';processedBlobs.push({blob:b,name});
   let card=document.createElement('div');card.style.cssText='border:1px solid #e2e7ef;border-radius:12px;padding:8px;text-align:center';
   card.innerHTML='<img src="'+url+'" style="width:100%;aspect-ratio:1;object-fit:contain;border-radius:8px"><button class="secondary" style="width:100%;padding:8px;margin-top:6px">写真に保存</button>';
   card.querySelector('button').onclick=()=>shareBlob(b,name);results.append(card);
   status.textContent=(i+1)+'/'+items.length+'枚を作成しました';
  }
- status.textContent='完了！各画像の「写真に保存」を押して、共有メニューから「画像を保存」を選んでください。';
+ status.textContent='完了！個別保存または一括保存ができます。';document.querySelector('#saveAll').disabled=false;
 };
+document.querySelector('#saveAll').onclick=async()=>{if(!processedBlobs.length)return;const files=processedBlobs.map(x=>new File([x.blob],x.name,{type:'image/jpeg'}));if(navigator.canShare&&navigator.canShare({files})&&navigator.share){try{await navigator.share({files,title:'切り抜き画像'})}catch(e){if(e.name!=='AbortError')status.textContent='一括共有に失敗しました。個別保存を使ってください。'}}else{for(const x of processedBlobs){const a=document.createElement('a');a.href=URL.createObjectURL(x.blob);a.download=x.name;a.click()}status.textContent='画像を順番にダウンロードしました。写真アプリへは各画像を共有メニューから保存してください。'}};
 window.addEventListener('resize',()=>{fit();drawCrop()});
 </script>
 </body></html>
