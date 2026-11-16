@@ -53,7 +53,7 @@ button{font:inherit;border:0;border-radius:12px;padding:13px 16px;cursor:pointer
 <option value="savePdf" disabled>PDFで保存</option>
 <option value="saveTiff" disabled>TIFFで保存</option>
 </select>
-<button class="primary" id="runAction" type="button">実行</button>
+<button class="primary" id="runAction" type="button" disabled>実行</button>
 </div>
 </div>
 <div id="status" aria-live="polite" style="font-size:13px;color:#536174"></div>
@@ -120,6 +120,7 @@ function setActionAvailability(){
  actionSelect.querySelector('option[value="savePdf"]').disabled=!hasResults;
  actionSelect.querySelector('option[value="saveTiff"]').disabled=!hasResults;
  if(!hasImages)actionSelect.value='process';
+ runActionButton.disabled=!hasImages;
 }
 function clearProcessedResults(){
  resultUrls.forEach(url=>URL.revokeObjectURL(url));resultUrls=[];
@@ -190,7 +191,7 @@ async function processAllImages(){
  if(!items.length){status.textContent='先に写真を選んでください';return}
  const processingItems=items.slice(),cropSnapshot={...box};
  const previousFilesDisabled=filesEl.disabled;
- filesEl.disabled=true;runActionButton.disabled=true;clearProcessedResults();
+ filesEl.disabled=true;clearProcessedResults();runActionButton.disabled=true;
  status.textContent='撮影日時の古い写真から順に切り抜いています…';
  try{
   for(let index=0;index<processingItems.length;index++){
@@ -392,6 +393,7 @@ async function saveTiffImages(){
 }
 
 
+setActionAvailability();
 runActionButton.onclick=async()=>{
  if(runActionButton.disabled)return;
  switch(actionSelect.value){
