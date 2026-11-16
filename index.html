@@ -51,7 +51,6 @@ button{font:inherit;border:0;border-radius:12px;padding:13px 16px;cursor:pointer
 <option value="preview" disabled>選択中の写真を切り抜いて確認</option>
 <option value="saveAll" disabled>一括保存（共有）</option>
 <option value="savePdf" disabled>PDFで保存</option>
-<option value="saveTiff" disabled>TIFFで保存</option>
 </select>
 <button class="primary" id="runAction" type="button" disabled>実行</button>
 </div>
@@ -118,7 +117,6 @@ function setActionAvailability(){
  actionSelect.querySelector('option[value="preview"]').disabled=!hasImages;
  actionSelect.querySelector('option[value="saveAll"]').disabled=!hasResults;
  actionSelect.querySelector('option[value="savePdf"]').disabled=!hasResults;
- actionSelect.querySelector('option[value="saveTiff"]').disabled=!hasResults;
  if(!hasImages)actionSelect.value='process';
  runActionButton.disabled=!hasImages;
 }
@@ -208,7 +206,7 @@ async function processAllImages(){
    card.append(image,filename,saveButton);resultsEl.append(card);
    status.textContent=(index+1)+'/'+processingItems.length+'枚を古い順に作成しました';
   }
-  status.textContent='完了！一括保存・PDF保存・TIFF保存を選択できます。';
+  status.textContent='完了！個別保存・一括保存・PDF保存ができます。';
   setActionAvailability();
  }catch(error){status.textContent='切り抜きに失敗しました: '+error.message;setActionAvailability()}
  finally{filesEl.disabled=previousFilesDisabled;runActionButton.disabled=false;setActionAvailability()}
@@ -292,118 +290,6 @@ async function savePdfImages(){
 
 
 
-function buildMultiPageTiffLayout(pageSpecs){
- if(!pageSpecs.length)throw new Error('TIFFにする画像がありません');
- const entryCount=14,ifdSize=2+entryCount*12+4;
- let cursor=8+pageSpecs.length*ifdSize;
- const metadata=pageSpecs.map(()=>{
-  if(cursor%2)cursor++;
-  const bitsOffset=cursor;cursor+=8;
-  while(cursor%4)cursor++;
-  const xResolutionOffset=cursor;cursor+=8;
-  const yResolutionOffset=cursor;cursor+=8;
-  return {bitsOffset,xResolutionOffset,yResolutionOffset};
- });
- while(cursor%4)cursor++;
- const pages=[];
- for(const spec of pageSpecs){
-  const width=spec.width,height=spec.height,pixelBytes=width*height*4;
-  if(!Number.isSafeInteger(pixelBytes)||pixelBytes<=0)throw new Error('TIFF画像のサイズが不正です');
-  pages.push({width,height,pixelBytes,pixelOffset:cursor});
-  cursor+=pixelBytes;
-  if(cursor>0xFFFFFFFF)throw new Error('TIFFの最大サイズ（4GB）を超えています。画像枚数を減らしてください。');
- }
- // Uncompressed RGBA TIFF files can be large; guard allocation for mobile browsers.
- if(cursor>512*1024*1024)throw new Error('TIFFが大きすぎます（上限512MB）。画像枚数や切り抜き範囲を減らしてください。');
- const buffer=new ArrayBuffer(cursor),view=new DataView(buffer),bytes=new Uint8Array(buffer);
- bytes[0]=0x49;bytes[1]=0x49;view.setUint16(2,42,true);view.setUint32(4,8,true);
- const writeEntry=(base,tag,type,count,value)=>{
-  view.setUint16(base,tag,true);view.setUint16(base+2,type,true);view.setUint32(base+4,count,true);
-  if(type===3&&count===1)view.setUint16(base+8,value,true);
-  else view.setUint32(base+8,value,true);
- };
- pages.forEach((page,index)=>{
-  const ifdOffset=8+index*ifdSize,meta=metadata[index];
-  view.setUint16(ifdOffset,entryCount,true);
-  let entry=ifdOffset+2;
-  writeEntry(entry,256,4,1,page.width);entry+=12;
-  writeEntry(entry,257,4,1,page.height);entry+=12;
-  writeEntry(entry,258,3,4,meta.bitsOffset);entry+=12;
-  writeEntry(entry,259,3,1,1);entry+=12;
-  writeEntry(entry,262,3,1,2);entry+=12;
-  writeEntry(entry,273,4,1,page.pixelOffset);entry+=12;
-  writeEntry(entry,277,3,1,4);entry+=12;
-  writeEntry(entry,278,4,1,page.height);entry+=12;
-  writeEntry(entry,279,4,1,page.pixelBytes);entry+=12;
-  writeEntry(entry,282,5,1,meta.xResolutionOffset);entry+=12;
-  writeEntry(entry,283,5,1,meta.yResolutionOffset);entry+=12;
-  writeEntry(entry,284,3,1,1);entry+=12;
-  writeEntry(entry,296,3,1,2);entry+=12;
-  writeEntry(entry,338,3,1,2);entry+=12;
-  view.setUint32(entry,index===pages.length-1?0:ifdOffset+ifdSize,true);
-  for(let channel=0;channel<4;channel++)view.setUint16(meta.bitsOffset+channel*2,8,true);
-  view.setUint32(meta.xResolutionOffset,72,true);view.setUint32(meta.xResolutionOffset+4,1,true);
-  view.setUint32(meta.yResolutionOffset,72,true);view.setUint32(meta.yResolutionOffset+4,1,true);
- });
- return {buffer,bytes,pages};
-}
-function writeTiffPage(layout,index,rgba){
- const page=layout.pages[index];
- if(!page||rgba.length!==page.pixelBytes)throw new Error('TIFF画像データのサイズが一致しません');
- layout.bytes.set(rgba,page.pixelOffset);
-}
-async function saveTiffImages(){
- if(!processedBlobs.length){status.textContent='先に写真を切り抜いてください。';return}
- const previousFilesDisabled=filesEl.disabled;
- filesEl.disabled=true;runActionButton.disabled=true;
- try{
-  // Source dimensions were cached while processing crops; use them to calculate each native-resolution page.
-  const pageSpecs=processedBlobs.map(result=>({
-   width:Math.max(1,Math.round(result.cropBox.w*result.item.naturalWidth)),
-   height:Math.max(1,Math.round(result.cropBox.h*result.item.naturalHeight))
-  }));
-  const layout=buildMultiPageTiffLayout(pageSpecs);
-  for(let index=0;index<processedBlobs.length;index++){
-   const result=processedBlobs[index];
-   const canvas=await makeCropCanvas(result.item,result.cropBox);
-   const context=canvas.getContext('2d',{willReadFrequently:true});
-   if(!context)throw new Error('Canvasから画像データを取得できませんでした');
-   if(canvas.width!==pageSpecs[index].width||canvas.height!==pageSpecs[index].height)throw new Error('TIFFページの寸法が一致しません');
-   const imageData=context.getImageData(0,0,canvas.width,canvas.height);
-   // Write one page directly into the final file buffer instead of retaining all page pixel arrays.
-   writeTiffPage(layout,index,imageData.data);
-   status.textContent='TIFFを生成中… '+(index+1)+'/'+processedBlobs.length+'ページ';
-   await new Promise(resolve=>setTimeout(resolve,0));
-  }
-  const tiffBlob=new Blob([layout.buffer],{type:'image/tiff'});
-  const tiffFile=new File([tiffBlob],'cropped_images.tiff',{type:'image/tiff'});
-  status.textContent='TIFFファイルを書き出しています…';
-  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[tiffFile]})){
-   try{
-    await navigator.share({files:[tiffFile],title:'cropped_images.tiff'});
-    status.textContent='cropped_images.tiff を共有しました。';
-   }catch(error){
-    if(error.name==='AbortError')status.textContent='TIFFの共有をキャンセルしました。';
-    else{
-     const url=URL.createObjectURL(tiffBlob),link=document.createElement('a');
-     link.href=url;link.download='cropped_images.tiff';link.rel='noopener';link.click();
-     setTimeout(()=>URL.revokeObjectURL(url),60000);
-     status.textContent='cropped_images.tiff のダウンロードを開始しました。';
-    }
-   }
-  }else{
-   const url=URL.createObjectURL(tiffBlob),link=document.createElement('a');
-   link.href=url;link.download='cropped_images.tiff';link.rel='noopener';link.click();
-   setTimeout(()=>URL.revokeObjectURL(url),60000);
-   status.textContent='cropped_images.tiff のダウンロードを開始しました。';
-  }
- }catch(error){
-  status.textContent='TIFFの作成に失敗しました: '+(error?.message||String(error));
- }finally{
-  filesEl.disabled=previousFilesDisabled;runActionButton.disabled=false;setActionAvailability();
- }
-}
-
 setActionAvailability();
 runActionButton.onclick=async()=>{
  if(runActionButton.disabled)return;
@@ -412,7 +298,6 @@ runActionButton.onclick=async()=>{
   case 'preview':await previewCurrentImage();break;
   case 'saveAll':await shareAllImages();break;
   case 'savePdf':await savePdfImages();break;
-  case 'saveTiff':await saveTiffImages();break;
  }
 };
 
