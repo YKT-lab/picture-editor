@@ -44,6 +44,7 @@ button{font:inherit;border:0;border-radius:12px;padding:13px 16px;cursor:pointer
 <div class="note">枠をドラッグして移動、右下の丸をドラッグしてサイズ変更。枠の位置・サイズは画像に対する割合として、すべての写真に適用されます。</div>
 <button class="primary" id="process">すべての写真を切り抜く</button>
 <button class="primary" id="saveAll" disabled>一括保存（共有）</button>
+<button class="secondary" id="savePdf" disabled>PDFで保存</button>
 <button class="secondary" id="previewOne">選択中の写真を切り抜いて確認</button>
 <div id="status" aria-live="polite" style="font-size:13px;color:#536174"></div>
 <h3 style="margin:4px 0 0">処理結果（古い順）</h3>
@@ -51,8 +52,9 @@ button{font:inherit;border:0;border-radius:12px;padding:13px 16px;cursor:pointer
 </section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/exifr/dist/lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script>
-const filesEl=document.querySelector('#files'),img=document.querySelector('#mainImg'),crop=document.querySelector('#crop'),preview=document.querySelector('#preview'),thumbs=document.querySelector('#thumbs'),ratioEl=document.querySelector('#ratio'),status=document.querySelector('#status'),resultsEl=document.querySelector('#results'),saveAllButton=document.querySelector('#saveAll');
+const filesEl=document.querySelector('#files'),img=document.querySelector('#mainImg'),crop=document.querySelector('#crop'),preview=document.querySelector('#preview'),thumbs=document.querySelector('#thumbs'),ratioEl=document.querySelector('#ratio'),status=document.querySelector('#status'),resultsEl=document.querySelector('#results'),saveAllButton=document.querySelector('#saveAll'),savePdfButton=document.querySelector('#savePdf');
 // selectedItems は選択時の順序を保持し、items は表示・処理用の撮影日時順配列。
 let selectedItems=[],items=[],active=0,box={x:.2,y:.2,w:.6,h:.6},drag=null,display={x:0,y:0,w:0,h:0},cropInitialized=false,processedBlobs=[],resultUrls=[],selectionVersion=0;
 function loadItem(i){active=i;img.onload=()=>{fit();if(!cropInitialized){setRatio();cropInitialized=true}else{drawCrop()}};img.src=items[i].url;[...thumbs.children].forEach((t,j)=>t.classList.toggle('active',j===i))}
@@ -102,7 +104,7 @@ function outputFileName(item,index){
 }
 function clearProcessedResults(){
  resultUrls.forEach(url=>URL.revokeObjectURL(url));resultUrls=[];
- processedBlobs=[];resultsEl.innerHTML='';saveAllButton.disabled=true;
+ processedBlobs=[];resultsEl.innerHTML='';saveAllButton.disabled=true;savePdfButton.disabled=true;
 }
 function fit(){const p=preview.getBoundingClientRect(),nw=img.naturalWidth,nh=img.naturalHeight;let s=Math.min((p.width-12)/nw,(p.height-12)/nh);display.w=nw*s;display.h=nh*s;display.x=(p.width-display.w)/2;display.y=(p.height-display.h)/2;img.style.width=display.w+'px';img.style.height=display.h+'px';img.style.position='absolute';img.style.left=display.x+'px';img.style.top=display.y+'px'}
 function drawCrop(){if(!img.naturalWidth)return;crop.hidden=false;crop.style.left=(display.x+box.x*display.w)+'px';crop.style.top=(display.y+box.y*display.h)+'px';crop.style.width=(box.w*display.w)+'px';crop.style.height=(box.h*display.h)+'px';updateDimensions()}
@@ -190,8 +192,8 @@ document.querySelector('#process').onclick=async()=>{
    status.textContent=(index+1)+'/'+processingItems.length+'枚を古い順に作成しました';
   }
   status.textContent='完了！個別保存または一括保存（共有）ができます。';
-  saveAllButton.disabled=processedBlobs.length===0;
- }catch(error){status.textContent='切り抜きに失敗しました: '+error.message;saveAllButton.disabled=true}
+  saveAllButton.disabled=processedBlobs.length===0;savePdfButton.disabled=processedBlobs.length===0;
+ }catch(error){status.textContent='切り抜きに失敗しました: '+error.message;saveAllButton.disabled=true;savePdfButton.disabled=true}
  finally{filesEl.disabled=previousFilesDisabled;processButton.disabled=previousProcessDisabled}
 };
 saveAllButton.onclick=async()=>{
@@ -206,6 +208,73 @@ saveAllButton.onclick=async()=>{
   status.textContent='撮影日時の古い順に画像をダウンロードしました。ファイル名の連番でも順番を確認できます。';
  }
 };
+
+savePdfButton.onclick=async()=>{
+ if(!processedBlobs.length){status.textContent='先に写真を切り抜いてください。';return}
+ if(!window.PDFLib?.PDFDocument){status.textContent='PDFライブラリを読み込めませんでした。通信状態を確認して再読み込みしてください。';return}
+ const previousFilesDisabled=filesEl.disabled,processButton=document.querySelector('#process'),previousProcessDisabled=processButton.disabled;
+ const previousSaveAllDisabled=saveAllButton.disabled;
+ filesEl.disabled=true;processButton.disabled=true;saveAllButton.disabled=true;savePdfButton.disabled=true;
+ status.textContent='PDFを準備しています…';
+ try{
+  const pdfDoc=await window.PDFLib.PDFDocument.create();
+  pdfDoc.setTitle('切り抜き画像');
+  pdfDoc.setSubject('撮影日時の古い順に並べた切り抜き画像');
+  // processedBlobs は切り抜き時に撮影日時順で格納済み。JPEGバイト列を再圧縮せず直接埋め込む。
+  for(let index=0;index<processedBlobs.length;index++){
+   const item=processedBlobs[index];
+   const imageBytes=await item.blob.arrayBuffer();
+   const embeddedImage=await pdfDoc.embedJpg(imageBytes);
+   // 96 dpi相当のページ寸法。縦横比を保ち、各画像に合わせてページの向きを変える。
+   const pageWidth=embeddedImage.width*72/96;
+   const pageHeight=embeddedImage.height*72/96;
+   const page=pdfDoc.addPage([pageWidth,pageHeight]);
+   page.drawImage(embeddedImage,{x:0,y:0,width:pageWidth,height:pageHeight});
+   status.textContent='PDFを生成中… '+(index+1)+'/'+processedBlobs.length+'ページ';
+   await new Promise(resolve=>setTimeout(resolve,0));
+  }
+  status.textContent='PDFファイルを書き出しています…';
+  const pdfBytes=await pdfDoc.save({useObjectStreams:true});
+  const pdfBlob=new Blob([pdfBytes],{type:'application/pdf'});
+  const pdfFile=new File([pdfBlob],'cropped_images.pdf',{type:'application/pdf'});
+  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[pdfFile]})){
+   try{
+    await navigator.share({files:[pdfFile],title:'cropped_images.pdf'});
+    status.textContent='PDFを共有しました（cropped_images.pdf）。';
+   }catch(shareError){
+    if(shareError.name==='AbortError'){
+     status.textContent='PDFの共有をキャンセルしました。必要な場合は「PDFで保存」をもう一度押してください。';
+    }else{
+     const pdfUrl=URL.createObjectURL(pdfBlob);
+     if(/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)){
+      status.textContent='PDFを開きます。共有メニューから「ファイルに保存」を選択してください。';
+      window.location.href=pdfUrl;
+     }else{
+      const link=document.createElement('a');link.href=pdfUrl;link.download='cropped_images.pdf';link.click();
+      setTimeout(()=>URL.revokeObjectURL(pdfUrl),60000);
+      status.textContent='cropped_images.pdf をダウンロードしました。';
+     }
+    }
+   }
+  }else{
+   const pdfUrl=URL.createObjectURL(pdfBlob);
+   if(/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)){
+    status.textContent='PDFを開きます。共有メニューから「ファイルに保存」を選択してください。';
+    window.location.href=pdfUrl;
+   }else{
+    const link=document.createElement('a');link.href=pdfUrl;link.download='cropped_images.pdf';link.rel='noopener';link.click();
+    setTimeout(()=>URL.revokeObjectURL(pdfUrl),60000);
+    status.textContent='cropped_images.pdf をダウンロードしました。';
+   }
+  }
+ }catch(error){
+  status.textContent='PDFの作成に失敗しました: '+(error?.message||String(error));
+ }finally{
+  filesEl.disabled=previousFilesDisabled;processButton.disabled=previousProcessDisabled;
+  saveAllButton.disabled=previousSaveAllDisabled;savePdfButton.disabled=processedBlobs.length===0;
+ }
+};
+
 window.addEventListener('resize',()=>{fit();drawCrop()});
 </script>
 </body></html>
